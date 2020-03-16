@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"strings"
 	"time"
 
@@ -16,46 +15,24 @@ import (
 )
 
 type BleSensor struct {
-	address          string
-	manufacturerData []byte
-	scanDuration     time.Duration
-	retries          uint8
-}
-
-func NewBleSensor(address string, manufacturerData []byte, scanDuration time.Duration, retries uint8) BleSensor {
-	return BleSensor{
-		address:          address,
-		manufacturerData: manufacturerData,
-		scanDuration:     scanDuration,
-		retries:          retries,
-	}
+	Addr         string
+	ScanDuration time.Duration
+	Retries      int
 }
 
 func (sensor *BleSensor) Address() string {
-	return sensor.address
-}
-
-func (sensor *BleSensor) SerialNumber() string {
-	return ManufacturerDataToSerialNumber(sensor.manufacturerData)
-}
-
-func ManufacturerDataToSerialNumber(manufacturerData []byte) string {
-	serialNumber := uint32(manufacturerData[2])
-	serialNumber |= uint32(manufacturerData[3]) << 8
-	serialNumber |= uint32(manufacturerData[4]) << 16
-	serialNumber |= uint32(manufacturerData[5]) << 24
-	return fmt.Sprint(serialNumber)
+	return sensor.Addr
 }
 
 func (sensor *BleSensor) Receive() (airthings.SensorValues, error) {
 	var lastErr error
 	var values airthings.SensorValues
-	for i := uint8(0); i < sensor.retries; i++ {
+	for i := 0; i < sensor.Retries; i++ {
 		values, lastErr = sensor.receive()
 		if lastErr == nil {
 			return values, nil
 		}
-		if i < sensor.retries {
+		if i < sensor.Retries {
 			log.Errorf("retrying error in receive: %s", lastErr.Error())
 		}
 	}
@@ -64,14 +41,12 @@ func (sensor *BleSensor) Receive() (airthings.SensorValues, error) {
 }
 
 func (sensor *BleSensor) receive() (airthings.SensorValues, error) {
-	deviceAddr := sensor.address
-
 	filter := func(a ble.Advertisement) bool {
-		return strings.ToUpper(a.Addr().String()) == strings.ToUpper(deviceAddr)
+		return strings.ToUpper(a.Addr().String()) == strings.ToUpper(sensor.Addr)
 	}
 
-	log.Debugf("Connecting to Airthings Wave+: SN %s, Addr %s", sensor.SerialNumber(), sensor.Address())
-	ctx := ble.WithSigHandler(context.WithTimeout(context.Background(), sensor.scanDuration))
+	log.Debugf("Connecting to Airthings Wave+ at addr: %s", sensor.Address())
+	ctx := ble.WithSigHandler(context.WithTimeout(context.Background(), sensor.ScanDuration))
 	cln, err := ble.Connect(ctx, filter)
 	if err != nil {
 		return airthings.SensorValues{}, errors.Wrap(err, "couldn't connect to ble")

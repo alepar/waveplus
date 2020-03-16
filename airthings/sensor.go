@@ -2,8 +2,7 @@ package airthings
 
 type Sensor interface {
 	Address() string
-	SerialNumber() string
-	Receive() SensorValues
+	Receive() (SensorValues, error)
 }
 
 type SensorValues struct {
