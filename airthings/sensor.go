@@ -8,23 +8,23 @@ type Sensor interface {
 
 type SensorValues struct {
 	// units: % of relative Humidity
-	humidity float32
+	Humidity float32
 
 	// units: Bq/m3
-	radonShort uint16
+	RadonShort uint16
 
 	// units: Bq/m3
-	radonLong uint16
+	RadonLong uint16
 
 	// units: degrees Celsius
-	temperature float32
+	Temperature float32
 
 	// units: hPa
-	atmPressure float32
+	AtmPressure float32
 
 	// units: ppm
-	co2Level float32
+	Co2Level float32
 
 	// units: ppb
-	vocLevel float32
+	VocLevel float32
 }
