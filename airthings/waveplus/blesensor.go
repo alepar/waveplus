@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-ble/ble"
 	"github.com/pkg/errors"
-	"github.com/prometheus/common/log"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/alepar/airthings/airthings"
 )
@@ -33,7 +33,7 @@ func (sensor *BleSensor) Receive() (airthings.SensorValues, error) {
 			return values, nil
 		}
 		if i < sensor.Retries {
-			log.Errorf("retrying error in receive: %s", lastErr.Error())
+			log.Errorf("retrying error in receive: %s", lastErr)
 		}
 	}
 

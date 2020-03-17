@@ -1,10 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
-	"log"
 	"net/http"
 	"time"
+
+	"github.com/go-ble/ble"
+	"github.com/go-ble/ble/linux"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -15,8 +19,8 @@ import (
 // CLI args
 var (
 	listenAddr   = flag.String("listen-address", ":8080", "The address to listen on for HTTP requests.")
-	readInterval = flag.Duration("read-int", 1*time.Minute, "time interval between sensor reads")
-	scanDuration = flag.Duration("scan-dur", 2500*time.Millisecond, "scan duration")
+	readInterval = flag.Duration("read-int", 30*time.Second, "time interval between sensor reads")
+	scanDuration = flag.Duration("scan-dur", 5000*time.Millisecond, "scan duration")
 	retries      = flag.Int("retries", 5, "max number of tries in case of BLE errors")
 )
 
@@ -52,19 +56,18 @@ func init() {
 
 	// Add Go module build info.
 	prometheus.MustRegister(prometheus.NewBuildInfoCollector())
+
+	//logging
+	formatter := &log.TextFormatter{
+		FullTimestamp: true,
+	}
+	log.SetFormatter(formatter)
 }
 
 func main() {
 	flag.Parse()
 
-	scanner := waveplus.BleScanner{
-		ScanDuration: *scanDuration,
-		Retries:      *retries,
-	}
-	sensorsMap, err := scanner.Scan()
-	if err != nil {
-		panic(err)
-	}
+	// TODO logs if it started successfully
 
 	go func() {
 		// Expose the registered metrics via HTTP.
@@ -79,21 +82,59 @@ func main() {
 	}()
 
 	for {
-		for serialNr, sensor := range sensorsMap {
-			values, err := sensor.Receive()
-			if err != nil {
-				panic(err)
-			}
+		scanAndReceive()
+		time.Sleep(*readInterval)
+	}
+}
 
-			gaugeHumidity.WithLabelValues(serialNr).Set(float64(values.Humidity))
-			gaugeRadonShort.WithLabelValues(serialNr).Set(float64(values.RadonShort))
-			gaugeRadonLong.WithLabelValues(serialNr).Set(float64(values.RadonLong))
-			gaugeTemperature.WithLabelValues(serialNr).Set(float64(values.Temperature))
-			gaugeAtmPressure.WithLabelValues(serialNr).Set(float64(values.AtmPressure))
-			gaugeCo2Level.WithLabelValues(serialNr).Set(float64(values.Co2Level))
-			gaugeVocLevel.WithLabelValues(serialNr).Set(float64(values.VocLevel))
+func scanAndReceive() {
+	// open BLE
+	d, err := linux.NewDevice()
+	if err != nil {
+		log.Errorf("failed to open ble: %s", err)
+		return
+	}
+	ble.SetDefaultDevice(d)
+	defer ble.Stop()
+
+	// Scan
+	scanner := waveplus.BleScanner{
+		ScanDuration: *scanDuration,
+		Retries:      *retries,
+	}
+	sensorsMap, err := scanner.Scan()
+	if err != nil {
+		log.Errorf("failed to scan for sensors: %s", err)
+		return
+	}
+
+	// Receive from every found sensor
+	for serialNr, sensor := range sensorsMap {
+		log.Printf("Found: serialNr %s addr %s", serialNr, sensor.Address())
+
+		values, err := sensor.Receive()
+		if err != nil {
+			log.Errorf("failed to read from sensor (serialNr %s): %s", serialNr, err)
+			continue
 		}
 
-		time.Sleep(*readInterval)
+		valuesAsJson, err := json.Marshal(values)
+		if err == nil {
+			log.Printf("Received: %s", valuesAsJson)
+		} else {
+			log.Printf("Received: <marshall error: %s>", err)
+		}
+
+		gaugeHumidity.WithLabelValues(serialNr).Set(float64(values.Humidity))
+		gaugeRadonShort.WithLabelValues(serialNr).Set(float64(values.RadonShort))
+		gaugeRadonLong.WithLabelValues(serialNr).Set(float64(values.RadonLong))
+		gaugeTemperature.WithLabelValues(serialNr).Set(float64(values.Temperature))
+		gaugeAtmPressure.WithLabelValues(serialNr).Set(float64(values.AtmPressure))
+		gaugeCo2Level.WithLabelValues(serialNr).Set(float64(values.Co2Level))
+		gaugeVocLevel.WithLabelValues(serialNr).Set(float64(values.VocLevel))
+
+		// TODO metric and log for a successful/failed read from sensor
+		// TODO when read failed - stop gauge from being reported to prometheus - ie you get missing data points
+		// TODO how about panicking when all retries exhausted? doublecheck it kills the process? or recovers
 	}
 }

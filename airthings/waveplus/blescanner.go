@@ -6,9 +6,8 @@ import (
 	"time"
 
 	"github.com/go-ble/ble"
-	"github.com/go-ble/ble/linux"
 	"github.com/pkg/errors"
-	"github.com/prometheus/common/log"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/alepar/airthings/airthings"
 )
@@ -27,7 +26,7 @@ func (scanner *BleScanner) Scan() (map[string]airthings.Sensor, error) {
 			return devices, nil
 		}
 		if i < scanner.Retries {
-			log.Errorf("retrying error in scan: %s", lastErr.Error())
+			log.Errorf("retrying error in scan: %s", lastErr)
 		}
 	}
 
@@ -35,12 +34,6 @@ func (scanner *BleScanner) Scan() (map[string]airthings.Sensor, error) {
 }
 
 func (scanner *BleScanner) scan() (map[string]airthings.Sensor, error) {
-	d, err := linux.NewDevice()
-	if err != nil {
-		return map[string]airthings.Sensor{}, errors.Wrap(err, "failed to open ble")
-	}
-	ble.SetDefaultDevice(d)
-
 	ctx := ble.WithSigHandler(context.WithTimeout(context.Background(), scanner.ScanDuration))
 	ads, err := ble.Find(ctx, false, wavePlusOnlyFilter)
 	if err != nil {
