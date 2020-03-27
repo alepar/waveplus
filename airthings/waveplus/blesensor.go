@@ -34,6 +34,7 @@ func (sensor *BleSensor) Receive() (airthings.SensorValues, error) {
 		}
 		if i < sensor.Retries {
 			log.Errorf("retrying error in receive: %s", lastErr)
+			time.Sleep(sensor.ScanDuration) // self-pacing interval in an attempt to fix freezes
 		}
 	}
 
@@ -45,7 +46,7 @@ func (sensor *BleSensor) receive() (airthings.SensorValues, error) {
 		return strings.ToUpper(a.Addr().String()) == strings.ToUpper(sensor.Addr)
 	}
 
-	log.Debugf("Connecting to Airthings Wave+ at addr: %s", sensor.Address())
+	log.Debugf("connecting to device")
 	ctx := ble.WithSigHandler(context.WithTimeout(context.Background(), sensor.ScanDuration))
 	cln, err := ble.Connect(ctx, filter)
 	if err != nil {
@@ -58,50 +59,70 @@ func (sensor *BleSensor) receive() (airthings.SensorValues, error) {
 	done := make(chan struct{})
 	go func() {
 		<-cln.Disconnected()
+		log.Debugf("device disconnected")
 		close(done)
 	}()
 	defer func() {
+		log.Debugf("closing connection")
 		_ = cln.CancelConnection()
 		<-done
 	}()
 
-	p, err := cln.DiscoverProfile(true)
+	// TODO move to init
+	serviceUuid, err := ble.Parse(sensorServiceUuidStr)
 	if err != nil {
-		return airthings.SensorValues{}, errors.Wrap(err, "couldn't discover ble profile")
+		log.Fatalf("could not parse service uuid: %s", err)
+	}
+	log.Debugf("discovering services")
+	services, err := cln.DiscoverServices([]ble.UUID{serviceUuid})
+	log.Debugf("finished discovering services")
+	if err != nil {
+		return airthings.SensorValues{}, errors.Wrap(err, "couldn't discover services")
+	}
+	if len(services) == 0 {
+		return airthings.SensorValues{}, errors.Wrap(err, "did not find expected sensor service")
 	}
 
-	for _, s := range p.Services {
-		if s.UUID.String() == sensorServiceUuid {
+	service := services[0]
+	// TODO move to init
+	charUuid, err := ble.Parse(sensorCharacteristicUuid)
+	if err != nil {
+		log.Fatalf("could not parse characteristic uuid: %s", err)
+	}
+	log.Debugf("discovering characteristics")
+	characteristics, err := cln.DiscoverCharacteristics([]ble.UUID{charUuid}, service)
+	log.Debugf("finished discovering characteristics")
+	if err != nil {
+		return airthings.SensorValues{}, errors.Wrap(err, "couldn't discover characteristic")
+	}
+	if len(characteristics) == 0 {
+		return airthings.SensorValues{}, errors.Wrap(err, "did not find expected characteristic")
+	}
+	c := characteristics[0]
 
-			for _, c := range s.Characteristics {
-				if c.UUID.String() == sensorCharacteristicUuid {
-					sensorBytes, err := cln.ReadCharacteristic(c)
-					if err != nil {
-						return airthings.SensorValues{}, errors.Wrap(err, "failed to read characteristic value")
-					}
-
-					sensorUnpacked := rawSensorValues{}
-					buf := bytes.NewBuffer(sensorBytes)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i0_unk)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i1_humidity)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i2_unk)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i3_unk)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i4_radonShort)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i5_radonLong)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i6_temperature)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i7_atm_pressure)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i8_co2)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i9_voc)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i10_unk)
-					_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i11_unk)
-
-					return refineRawValues(sensorUnpacked), nil
-				}
-			}
-		}
+	log.Debugf("reading characteristic")
+	sensorBytes, err := cln.ReadCharacteristic(c)
+	log.Debugf("finished reading characteristic")
+	if err != nil {
+		return airthings.SensorValues{}, errors.Wrap(err, "failed to read characteristic value")
 	}
 
-	return airthings.SensorValues{}, errors.New("could not find matching service or characteristic")
+	sensorUnpacked := rawSensorValues{}
+	buf := bytes.NewBuffer(sensorBytes)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i0_unk)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i1_humidity)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i2_unk)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i3_unk)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i4_radonShort)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i5_radonLong)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i6_temperature)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i7_atm_pressure)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i8_co2)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i9_voc)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i10_unk)
+	_ = binary.Read(buf, binary.LittleEndian, &sensorUnpacked.i11_unk)
+
+	return refineRawValues(sensorUnpacked), nil
 }
 
 func refineRawValues(raw rawSensorValues) airthings.SensorValues {
@@ -116,7 +137,7 @@ func refineRawValues(raw rawSensorValues) airthings.SensorValues {
 	}
 }
 
-const sensorServiceUuid = "b42e1c08ade711e489d3123b93f75cba"
+const sensorServiceUuidStr = "b42e1c08ade711e489d3123b93f75cba"
 const sensorCharacteristicUuid = "b42e2a68ade711e489d3123b93f75cba"
 
 type rawSensorValues struct {

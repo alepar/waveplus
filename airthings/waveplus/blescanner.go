@@ -27,6 +27,7 @@ func (scanner *BleScanner) Scan() (map[string]airthings.Sensor, error) {
 		}
 		if i < scanner.Retries {
 			log.Errorf("retrying error in scan: %s", lastErr)
+			time.Sleep(scanner.ScanDuration) // self-pacing interval in an attempt to fix freezes
 		}
 	}
 
@@ -35,7 +36,9 @@ func (scanner *BleScanner) Scan() (map[string]airthings.Sensor, error) {
 
 func (scanner *BleScanner) scan() (map[string]airthings.Sensor, error) {
 	ctx := ble.WithSigHandler(context.WithTimeout(context.Background(), scanner.ScanDuration))
+	log.Debugf("finding the devices")
 	ads, err := ble.Find(ctx, false, wavePlusOnlyFilter)
+	log.Debugf("finished finding the devices")
 	if err != nil {
 		switch errors.Cause(err) {
 		case nil:
@@ -65,7 +68,7 @@ func (scanner *BleScanner) scan() (map[string]airthings.Sensor, error) {
 func wavePlusOnlyFilter(a ble.Advertisement) bool {
 	if a.Connectable() {
 		manufacturerData := a.ManufacturerData()
-		if len(manufacturerData) >= 6 && manufacturerData[0] == 0x34 && manufacturerData[1] == 0x03 {
+		if len(manufacturerData) >= 6 && manufacturerData[1] == 0x03 {
 			return true
 		}
 	}
@@ -74,6 +77,10 @@ func wavePlusOnlyFilter(a ble.Advertisement) bool {
 }
 
 func manufacturerDataToSerialNumber(manufacturerData []byte) string {
+	if (len(manufacturerData)) < 6 {
+		return "-1"
+	}
+
 	serialNumber := uint32(manufacturerData[2])
 	serialNumber |= uint32(manufacturerData[3]) << 8
 	serialNumber |= uint32(manufacturerData[4]) << 16
