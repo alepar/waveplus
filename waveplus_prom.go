@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"math"
 	"net/http"
 	"time"
 
@@ -69,14 +70,11 @@ func init() {
 	if *debug {
 		log.SetLevel(log.DebugLevel)
 	}
-
 }
 
 func main() {
-	// TODO logs if it started successfully
-
+	// Expose the metrics to Prometheus
 	go func() {
-		// Expose the registered metrics via HTTP.
 		http.Handle("/metrics", promhttp.HandlerFor(
 			prometheus.DefaultGatherer,
 			promhttp.HandlerOpts{
@@ -85,6 +83,36 @@ func main() {
 			},
 		))
 		log.Panic(http.ListenAndServe(*listenAddr, nil))
+	}()
+
+	watchdogChannel := make(chan bool)
+	maxTimeBetweenReads := math.Max(
+		(150 * time.Second).Seconds(), // Wave+ updates values every 5min, so we should be reading ~twice as fast
+		3*(readInterval.Seconds()+scanDuration.Seconds()),      // or a bit slower than the requested read frequency
+	)
+	// Start the watchdog thread
+	go func() {
+		heartbeatsSinceLastRead := 0
+		for {
+			val := <-watchdogChannel
+			if val {
+				// successful sensor read
+				heartbeatsSinceLastRead = 0
+			} else {
+				// a heartbeat
+				heartbeatsSinceLastRead++
+				if float64(heartbeatsSinceLastRead) > maxTimeBetweenReads {
+					log.Fatalf("No data received from sensor for over %d seconds, executing suicide", heartbeatsSinceLastRead)
+				}
+			}
+		}
+	}()
+	// Start the heartbeat thread
+	go func (){
+		for {
+			time.Sleep(1*time.Second)
+			watchdogChannel <- false
+		}
 	}()
 
 	// let's open BLE device and hang on to it
@@ -117,12 +145,15 @@ func main() {
 			}
 
 			openBleDevice()
+		} else {
+			watchdogChannel <- true // signal a successful read from the device
 		}
 		time.Sleep(*readInterval)
 	}
 }
 
 func openBleDevice() {
+	log.Info("Opening BLE device")
 	d, err := linux.NewDevice()
 	if err != nil {
 		log.Panicf("failed to open ble: %s", err)
